@@ -48,9 +48,12 @@ class AnalysisParameters(BaseModel):
     include_sentiment: bool = True
     include_risk: bool = True
     language: str = "zh-CN"
+    workflow_mode: str = "legacy"
+    thesis_id: Optional[str] = None
+    position_id: Optional[str] = None
     # 模型配置
-    quick_analysis_model: Optional[str] = "qwen-turbo"
-    deep_analysis_model: Optional[str] = "qwen-max"
+    quick_analysis_model: Optional[str] = "glm-3-turbo"
+    deep_analysis_model: Optional[str] = "glm-4"
 
 
 class AnalysisResult(BaseModel):
@@ -67,6 +70,13 @@ class AnalysisResult(BaseModel):
     execution_time: float = 0.0
     error_message: Optional[str] = None
     model_info: Optional[str] = None  # 🔥 添加模型信息字段
+    thesis: Optional[Dict[str, Any]] = None
+    thesis_health: Optional[Dict[str, Any]] = None
+    debate_verdict: Optional[Dict[str, Any]] = None
+    exit_decision: Optional[Dict[str, Any]] = None
+    macro_assessment: Optional[Dict[str, Any]] = None
+    sector_rotation: Optional[Dict[str, Any]] = None
+    cognitive_mirror: Optional[Dict[str, Any]] = None
 
 
 class AnalysisTask(BaseModel):

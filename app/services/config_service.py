@@ -12,6 +12,7 @@ from bson import ObjectId
 
 from app.core.database import get_mongo_db
 from app.core.unified_config import unified_config
+from app.services.model_resolver import canonicalize_provider, get_default_backend_url, get_default_test_model
 from app.models.config import (
     SystemConfig, LLMConfig, DataSourceConfig, DatabaseConfig,
     ModelProvider, DataSourceType, DatabaseType, LLMProvider,
@@ -411,23 +412,23 @@ class ConfigService:
                 ),
                 LLMConfig(
                     provider=ModelProvider.ZHIPU,
+                    model_name="glm-3-turbo",
+                    api_key="your-zhipu-api-key",
+                    api_base="https://open.bigmodel.cn/api/paas/v4",
+                    max_tokens=4000,
+                    temperature=0.7,
+                    enabled=True,
+                    description="智谱AI GLM-3 Turbo模型（快速/测试默认）"
+                ),
+                LLMConfig(
+                    provider=ModelProvider.ZHIPU,
                     model_name="glm-4",
                     api_key="your-zhipu-api-key",
                     api_base="https://open.bigmodel.cn/api/paas/v4",
                     max_tokens=4000,
                     temperature=0.7,
                     enabled=True,
-                    description="智谱AI GLM-4模型（推荐）"
-                ),
-                LLMConfig(
-                    provider=ModelProvider.QWEN,
-                    model_name="qwen-turbo",
-                    api_key="your-qwen-api-key",
-                    api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    max_tokens=4000,
-                    temperature=0.7,
-                    enabled=False,
-                    description="阿里云通义千问模型"
+                    description="智谱AI GLM-4模型（深度分析默认）"
                 )
             ],
             default_llm="glm-4",
@@ -505,7 +506,9 @@ class ConfigService:
                 "ta_us_min_api_interval_seconds": 1.0,
                 "ta_google_news_sleep_min_seconds": 2.0,
                 "ta_google_news_sleep_max_seconds": 6.0,
-                "app_timezone": "Asia/Shanghai"
+                "app_timezone": "Asia/Shanghai",
+                "quick_analysis_model": "glm-3-turbo",
+                "deep_analysis_model": "glm-4",
             }
         )
         
@@ -3248,7 +3251,7 @@ class ConfigService:
                 "message": "环境变量迁移失败"
             }
 
-    async def test_provider_api(self, provider_id: str) -> dict:
+    async def test_provider_api(self, provider_id: str, test_model: Optional[str] = None) -> dict:
         """测试厂家API密钥"""
         try:
             print(f"🔍 测试厂家API - provider_id: {provider_id}")
@@ -3295,7 +3298,7 @@ class ConfigService:
                 print(f"✅ 使用数据库配置的 {display_name} API密钥")
 
             # 根据厂家类型调用相应的测试函数
-            test_result = await self._test_provider_connection(provider_name, api_key, display_name)
+            test_result = await self._test_provider_connection(provider_name, api_key, display_name, test_model=test_model)
 
             return test_result
 
@@ -3306,27 +3309,34 @@ class ConfigService:
                 "message": f"测试失败: {str(e)}"
             }
 
-    async def _test_provider_connection(self, provider_name: str, api_key: str, display_name: str) -> dict:
+    async def _test_provider_connection(
+        self,
+        provider_name: str,
+        api_key: str,
+        display_name: str,
+        test_model: Optional[str] = None,
+    ) -> dict:
         """测试具体厂家的连接"""
         import asyncio
 
         try:
+            provider_name = canonicalize_provider(provider_name)
             # 聚合渠道（使用 OpenAI 兼容 API）
             if provider_name in ["302ai", "oneapi", "newapi", "custom_aggregator"]:
                 # 获取厂家的 base_url
                 db = await self._get_db()
                 providers_collection = db.llm_providers
                 provider_data = await providers_collection.find_one({"name": provider_name})
-                base_url = provider_data.get("default_base_url") if provider_data else None
+                base_url = (provider_data.get("default_base_url") if provider_data else None) or get_default_backend_url(provider_name)
                 return await asyncio.get_event_loop().run_in_executor(
-                    None, self._test_openai_compatible_api, api_key, display_name, base_url, provider_name
+                    None, self._test_openai_compatible_api, api_key, display_name, base_url, provider_name, test_model
                 )
             elif provider_name == "google":
                 # 获取厂家的 base_url
                 db = await self._get_db()
                 providers_collection = db.llm_providers
                 provider_data = await providers_collection.find_one({"name": provider_name})
-                base_url = provider_data.get("default_base_url") if provider_data else None
+                base_url = (provider_data.get("default_base_url") if provider_data else None) or get_default_backend_url(provider_name)
                 return await asyncio.get_event_loop().run_in_executor(None, self._test_google_api, api_key, display_name, base_url)
             elif provider_name == "deepseek":
                 return await asyncio.get_event_loop().run_in_executor(None, self._test_deepseek_api, api_key, display_name)
@@ -3340,6 +3350,14 @@ class ConfigService:
                 return await asyncio.get_event_loop().run_in_executor(None, self._test_anthropic_api, api_key, display_name)
             elif provider_name == "qianfan":
                 return await asyncio.get_event_loop().run_in_executor(None, self._test_qianfan_api, api_key, display_name)
+            elif provider_name == "zhipu":
+                db = await self._get_db()
+                providers_collection = db.llm_providers
+                provider_data = await providers_collection.find_one({"name": provider_name})
+                base_url = (provider_data.get("default_base_url") if provider_data else None) or get_default_backend_url(provider_name)
+                return await asyncio.get_event_loop().run_in_executor(
+                    None, self._test_openai_compatible_api, api_key, display_name, base_url, provider_name, test_model
+                )
             else:
                 # 🔧 对于未知的自定义厂家，使用 OpenAI 兼容 API 测试
                 logger.info(f"🔍 使用 OpenAI 兼容 API 测试自定义厂家: {provider_name}")
@@ -3347,7 +3365,7 @@ class ConfigService:
                 db = await self._get_db()
                 providers_collection = db.llm_providers
                 provider_data = await providers_collection.find_one({"name": provider_name})
-                base_url = provider_data.get("default_base_url") if provider_data else None
+                base_url = (provider_data.get("default_base_url") if provider_data else None) or get_default_backend_url(provider_name)
 
                 if not base_url:
                     return {
@@ -3356,7 +3374,7 @@ class ConfigService:
                     }
 
                 return await asyncio.get_event_loop().run_in_executor(
-                    None, self._test_openai_compatible_api, api_key, display_name, base_url, provider_name
+                    None, self._test_openai_compatible_api, api_key, display_name, base_url, provider_name, test_model
                 )
         except Exception as e:
             return {
@@ -4230,7 +4248,14 @@ class ConfigService:
 
         return filtered
 
-    def _test_openai_compatible_api(self, api_key: str, display_name: str, base_url: str = None, provider_name: str = None) -> dict:
+    def _test_openai_compatible_api(
+        self,
+        api_key: str,
+        display_name: str,
+        base_url: str = None,
+        provider_name: str = None,
+        test_model: Optional[str] = None,
+    ) -> dict:
         """测试 OpenAI 兼容 API（用于聚合渠道和自定义厂家）"""
         try:
             import requests
@@ -4266,20 +4291,13 @@ class ConfigService:
             }
 
             # 🔥 根据不同厂家选择合适的测试模型
-            test_model = "gpt-3.5-turbo"  # 默认模型
-            if provider_name == "siliconflow":
-                # 硅基流动使用免费的 Qwen 模型进行测试
-                test_model = "Qwen/Qwen2.5-7B-Instruct"
-                logger.info(f"🔍 硅基流动使用测试模型: {test_model}")
-            elif provider_name == "zhipu":
-                # 智谱AI使用 glm-4 模型进行测试
-                test_model = "glm-4"
-                logger.info(f"🔍 智谱AI使用测试模型: {test_model}")
+            resolved_test_model = get_default_test_model(provider_name, test_model)
+            logger.info(f"🔍 {display_name} 使用测试模型: {resolved_test_model}")
 
             # 使用一个通用的模型名称进行测试
             # 聚合渠道通常支持多种模型，这里使用 gpt-3.5-turbo 作为测试
             data = {
-                "model": test_model,
+                "model": resolved_test_model,
                 "messages": [
                     {"role": "user", "content": "Hello, please respond with 'OK' if you can read this."}
                 ],
@@ -4296,27 +4314,32 @@ class ConfigService:
                     if content and len(content.strip()) > 0:
                         return {
                             "success": True,
-                            "message": f"{display_name} API连接测试成功"
+                            "message": f"{display_name} API连接测试成功",
+                            "data": {"test_model": resolved_test_model},
                         }
                     else:
                         return {
                             "success": False,
-                            "message": f"{display_name} API响应为空"
+                            "message": f"{display_name} API响应为空",
+                            "data": {"test_model": resolved_test_model},
                         }
                 else:
                     return {
                         "success": False,
-                        "message": f"{display_name} API响应格式异常"
+                        "message": f"{display_name} API响应格式异常",
+                        "data": {"test_model": resolved_test_model},
                     }
             elif response.status_code == 401:
                 return {
                     "success": False,
-                    "message": f"{display_name} API密钥无效或已过期"
+                    "message": f"{display_name} API密钥无效或已过期",
+                    "data": {"test_model": resolved_test_model},
                 }
             elif response.status_code == 403:
                 return {
                     "success": False,
-                    "message": f"{display_name} API权限不足或配额已用完"
+                    "message": f"{display_name} API权限不足或配额已用完",
+                    "data": {"test_model": resolved_test_model},
                 }
             else:
                 try:
@@ -4328,7 +4351,8 @@ class ConfigService:
                     logger.error(f"   错误详情: {error_detail}")
                     return {
                         "success": False,
-                        "message": f"{display_name} API测试失败: {error_msg}"
+                        "message": f"{display_name} API测试失败: {error_msg}",
+                        "data": {"test_model": resolved_test_model},
                     }
                 except:
                     logger.error(f"❌ [{display_name}] API测试失败")
@@ -4337,13 +4361,15 @@ class ConfigService:
                     logger.error(f"   响应内容: {response.text[:500]}")
                     return {
                         "success": False,
-                        "message": f"{display_name} API测试失败: HTTP {response.status_code}"
+                        "message": f"{display_name} API测试失败: HTTP {response.status_code}",
+                        "data": {"test_model": resolved_test_model},
                     }
 
         except Exception as e:
             return {
                 "success": False,
-                "message": f"{display_name} API测试异常: {str(e)}"
+                "message": f"{display_name} API测试异常: {str(e)}",
+                "data": {"test_model": get_default_test_model(provider_name, test_model)},
             }
 
 

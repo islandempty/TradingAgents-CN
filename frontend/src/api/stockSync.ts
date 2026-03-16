@@ -28,6 +28,7 @@ export interface SyncResult {
   records?: number
   message?: string
   error?: string
+  data_source_used?: string
 }
 
 export interface SingleStockSyncResponse {
@@ -101,4 +102,3 @@ export const stockSyncApi = {
     return ApiClient.get<StockSyncStatus>(`/api/stock-sync/status/${symbol}`)
   }
 }
-

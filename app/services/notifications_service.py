@@ -97,7 +97,7 @@ class NotificationsService:
         q: Dict[str, Any] = {"user_id": user_id}
         if status in ("read", "unread"):
             q["status"] = status
-        if ntype in ("analysis", "alert", "system"):
+        if ntype in ("analysis", "alert", "system", "thesis_alert", "edge_report", "cognitive_snapshot"):
             q["type"] = ntype
         total = await db[self.collection].count_documents(q)
         cursor = db[self.collection].find(q).sort("created_at", -1).skip((page-1)*page_size).limit(page_size)
@@ -138,4 +138,3 @@ def get_notifications_service() -> NotificationsService:
     if _notifications_service is None:
         _notifications_service = NotificationsService()
     return _notifications_service
-

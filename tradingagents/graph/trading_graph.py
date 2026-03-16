@@ -36,6 +36,7 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
+from .investmind_v3 import run_investmind_v3_workflow
 
 
 def create_llm_by_provider(provider: str, model: str, backend_url: str, temperature: float, max_tokens: int, timeout: int, api_key: str = None):
@@ -887,6 +888,16 @@ class TradingAgentsGraph:
 
         self.ticker = company_name
         logger.debug(f"🔍 [GRAPH DEBUG] 设置self.ticker: '{self.ticker}'")
+
+        if self.config.get("workflow_mode") == "investmind_v3":
+            logger.info("🧠 使用 InvestMind v3 工作流")
+            return run_investmind_v3_workflow(
+                self,
+                company_name,
+                trade_date,
+                progress_callback=progress_callback,
+                task_id=task_id,
+            )
 
         # Initialize state
         logger.debug(f"🔍 [GRAPH DEBUG] 创建初始状态，传递参数: company_name='{company_name}', trade_date='{trade_date}'")

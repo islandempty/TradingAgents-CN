@@ -714,8 +714,8 @@ import { configApi } from '@/api/config'
 import DeepModelSelector from '@/components/DeepModelSelector.vue'
 import { ANALYSTS, convertAnalystNamesToIds } from '@/constants/analysts'
 import { marked } from 'marked'
-import { recommendModels, validateModels, type ModelRecommendationResponse } from '@/api/modelCapabilities'
-import { validateStockCode, getStockCodeFormatHelp, getStockCodeExamples } from '@/utils/stockValidator'
+import { recommendModels } from '@/api/modelCapabilities'
+import { validateStockCode, getStockCodeFormatHelp } from '@/utils/stockValidator'
 import { normalizeMarketForAnalysis, getMarketByStockCode } from '@/utils/market'
 
 // 配置marked选项
@@ -741,7 +741,6 @@ interface AnalysisForm {
 }
 
 // 使用store
-const appStore = useAppStore()
 const authStore = useAuthStore()
 const router = useRouter()
 const route = useRoute()
@@ -784,8 +783,8 @@ const generateStepsFromBackend = (backendSteps: any[]) => {
 
 // 模型设置
 const modelSettings = ref({
-  quickAnalysisModel: 'qwen-turbo',
-  deepAnalysisModel: 'qwen-max'
+  quickAnalysisModel: 'glm-3-turbo',
+  deepAnalysisModel: 'glm-4'
 })
 
 // 可用的模型列表（从配置中获取）
@@ -1698,7 +1697,7 @@ const goSimOrder = async () => {
       confirmButtonText: '确认下单',
       cancelButtonText: '取消',
       type: 'warning',
-      beforeClose: (action, instance, done) => {
+      beforeClose: (action, _instance, done) => {
         if (action === 'confirm') {
           // 验证输入
           if (tradeForm.quantity < 100 || tradeForm.quantity % 100 !== 0) {
@@ -1900,8 +1899,8 @@ const initializeModelSettings = async () => {
     })))
   } catch (error) {
     console.error('加载默认模型配置失败:', error)
-    modelSettings.value.quickAnalysisModel = 'qwen-turbo'
-    modelSettings.value.deepAnalysisModel = 'qwen-max'
+    modelSettings.value.quickAnalysisModel = 'glm-3-turbo'
+    modelSettings.value.deepAnalysisModel = 'glm-4'
   }
 }
 
@@ -2060,14 +2059,6 @@ const getCapabilityTagType = (level: number): 'success' | 'info' | 'warning' | '
 const isQuickAnalysisRole = (roles: string[] | undefined): boolean => {
   if (!roles || !Array.isArray(roles)) return false
   return roles.includes('quick_analysis') || roles.includes('both')
-}
-
-/**
- * 判断是否适合深度分析
- */
-const isDeepAnalysisRole = (roles: string[] | undefined): boolean => {
-  if (!roles || !Array.isArray(roles)) return false
-  return roles.includes('deep_analysis') || roles.includes('both')
 }
 
 /**

@@ -168,6 +168,24 @@
           </template>
         </el-table-column>
 
+        <el-table-column prop="watch_status" label="观察池" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.watch_status" size="small" :type="row.watch_status === 'active' ? 'success' : 'warning'">
+              {{ row.watch_status }}
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Thesis" width="150">
+          <template #default="{ row }">
+            <el-button v-if="row.linked_thesis_id" type="primary" link @click="goToThesis(row.linked_thesis_id)">
+              {{ row.linked_thesis_id.slice(0, 8) }}
+            </el-button>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="added_at" label="添加时间" width="120">
           <template #default="{ row }">
             {{ formatDate(row.added_at) }}
@@ -580,7 +598,7 @@ const addForm = ref({
 })
 
 // 股票代码验证器
-const validateStockCode = (rule: any, value: any, callback: any) => {
+const validateStockCode = (_rule: any, value: any, callback: any) => {
   if (!value) {
     callback(new Error('请输入股票代码'))
     return
@@ -646,8 +664,8 @@ const filteredFavorites = computed<FavoriteItem[]>(() => {
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
     result = result.filter((item: FavoriteItem) =>
-      item.stock_code.toLowerCase().includes(keyword) ||
-      item.stock_name.toLowerCase().includes(keyword)
+      String(item.stock_code || item.symbol || '').toLowerCase().includes(keyword) ||
+      String(item.stock_name || '').toLowerCase().includes(keyword)
     )
   }
 
@@ -705,6 +723,10 @@ const loadFavorites = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const goToThesis = (thesisId: string) => {
+  router.push({ path: '/thesis', query: { thesisId } })
 }
 
 // 同步实时行情
@@ -1025,8 +1047,8 @@ const handleSelectionChange = (selection: FavoriteItem[]) => {
 // 显示单个股票同步对话框
 const showSingleSyncDialog = (row: FavoriteItem) => {
   currentSyncStock.value = {
-    stock_code: row.stock_code,
-    stock_name: row.stock_name
+    stock_code: String(row.stock_code || row.symbol || ''),
+    stock_name: String(row.stock_name || '')
   }
   singleSyncDialogVisible.value = true
 }
@@ -1119,7 +1141,9 @@ const handleBatchSync = async () => {
 
   batchSyncLoading.value = true
   try {
-    const symbols = selectedStocks.value.map(stock => stock.stock_code)
+    const symbols = selectedStocks.value
+      .map(stock => stock.stock_code || stock.symbol)
+      .filter((symbol): symbol is string => Boolean(symbol))
 
     const res = await stockSyncApi.syncBatch({
       symbols,

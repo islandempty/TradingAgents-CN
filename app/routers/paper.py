@@ -8,6 +8,8 @@ import re
 from app.routers.auth_db import get_current_user
 from app.core.database import get_mongo_db
 from app.core.response import ok
+from app.models.thesis import ActivateThesisRequest, CloseThesisRequest, CreateThesisRequest, ThesisStatus
+from app.services.thesis_service import thesis_service
 
 router = APIRouter(prefix="/paper", tags=["paper"])
 logger = logging.getLogger("webapi")
@@ -28,6 +30,11 @@ class PlaceOrderRequest(BaseModel):
     market: Optional[str] = Field(None, description="市场类型 (CN/HK/US)，不传则自动识别")
     # 可选：关联的分析ID，便于从分析页面一键下单后追踪
     analysis_id: Optional[str] = None
+    workflow_mode: Literal["legacy", "investmind_v3"] = "legacy"
+    thesis_id: Optional[str] = None
+    create_thesis_payload: Optional[CreateThesisRequest] = None
+    current_health: Optional[str] = None
+    close_reason: Optional[str] = None
 
 
 def _detect_market_and_code(code: str) -> Tuple[str, str]:
@@ -160,7 +167,7 @@ def _calculate_commission(market: str, side: str, amount: float, rules: Dict[str
 async def _get_available_quantity(user_id: str, code: str, market: str) -> int:
     """获取可用数量（考虑T+1限制）"""
     db = get_mongo_db()
-    pos = await db["paper_positions"].find_one({"user_id": user_id, "code": code})
+    pos = await db["paper_positions"].find_one(_active_position_query(user_id, code))
 
     if not pos:
         return 0
@@ -209,11 +216,18 @@ async def _get_last_price(code: str, market: str) -> Optional[float]:
         # 1. 尝试从 market_quotes 获取
         q = await db["market_quotes"].find_one(
             {"$or": [{"code": code}, {"symbol": code}]},
-            {"_id": 0, "close": 1}
+            {"_id": 0, "close": 1, "price": 1, "current_price": 1}
         )
-        if q and q.get("close") is not None:
+        if q:
             try:
-                price = float(q["close"])
+                raw_price = q.get("close")
+                if raw_price is None:
+                    raw_price = q.get("price")
+                if raw_price is None:
+                    raw_price = q.get("current_price")
+                if raw_price is None:
+                    raise ValueError("no usable price field")
+                price = float(raw_price)
                 if price > 0:
                     logger.debug(f"✅ 从 market_quotes 获取价格: {code} = {price}")
                     return price
@@ -267,6 +281,20 @@ def _zfill_code(code: str) -> str:
     return s.zfill(6)
 
 
+def _active_position_query(user_id: str, code: Optional[str] = None) -> Dict[str, Any]:
+    query: Dict[str, Any] = {
+        "user_id": user_id,
+        "$or": [
+            {"status": {"$exists": False}},
+            {"status": {"$ne": "closed"}},
+            {"quantity": {"$gt": 0}},
+        ],
+    }
+    if code is not None:
+        query["code"] = code
+    return query
+
+
 @router.get("/account", response_model=dict)
 async def get_account(current_user: dict = Depends(get_current_user)):
     """获取或创建纸上账户，返回资金与持仓估值汇总（支持多市场）"""
@@ -274,7 +302,7 @@ async def get_account(current_user: dict = Depends(get_current_user)):
     acc = await _get_or_create_account(current_user["id"])
 
     # 聚合持仓估值（按货币分类）
-    positions = await db["paper_positions"].find({"user_id": current_user["id"]}).to_list(None)
+    positions = await db["paper_positions"].find(_active_position_query(current_user["id"])).to_list(None)
 
     positions_value_by_currency = {
         "CNY": 0.0,
@@ -305,7 +333,12 @@ async def get_account(current_user: dict = Depends(get_current_user)):
             "avg_cost": avg_cost,
             "last_price": last,
             "market_value": mkt_value,
-            "unrealized_pnl": None if last is None else round((last - avg_cost) * qty, 2)
+            "unrealized_pnl": None if last is None else round((last - avg_cost) * qty, 2),
+            "thesis_id": p.get("thesis_id"),
+            "stop_loss": p.get("stop_loss"),
+            "target_price": p.get("target_price"),
+            "min_hold_days": p.get("min_hold_days"),
+            "current_health": p.get("current_health"),
         })
 
     # 计算总资产（按货币分别显示）
@@ -356,6 +389,7 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
     side = payload.side
     qty = int(payload.quantity)
     analysis_id = getattr(payload, "analysis_id", None)
+    workflow_mode = getattr(payload, "workflow_mode", "legacy")
 
     # 2. 确定货币
     currency_map = {
@@ -385,10 +419,54 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
     total_cost = notional + commission
 
     # 7. 获取持仓
-    pos = await db["paper_positions"].find_one({"user_id": current_user["id"], "code": normalized_code})
+    pos = await db["paper_positions"].find_one(_active_position_query(current_user["id"], normalized_code))
 
     now_iso = datetime.utcnow().isoformat()
     realized_pnl_delta = 0.0
+    linked_thesis_id = payload.thesis_id
+    linked_thesis_doc: Optional[Dict[str, Any]] = None
+    position_fields: Dict[str, Any] = {
+        "current_health": payload.current_health,
+    }
+
+    if workflow_mode == "investmind_v3" and side == "buy":
+        if not linked_thesis_id and not payload.create_thesis_payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="investmind_v3 模式下买入必须关联 thesis_id 或 create_thesis_payload",
+            )
+        if linked_thesis_id:
+            linked_thesis_doc = await thesis_service.get_thesis(current_user["id"], linked_thesis_id)
+            if not linked_thesis_doc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="关联的 Thesis 不存在",
+                )
+        elif payload.create_thesis_payload:
+            create_payload = payload.create_thesis_payload.model_copy(
+                update={
+                    "symbol": normalized_code,
+                    "status": ThesisStatus.ACTIVE,
+                    "entry_price": payload.create_thesis_payload.entry_price or price,
+                    "metadata": {
+                        **(payload.create_thesis_payload.metadata or {}),
+                        "source": "paper_order",
+                        "workflow_mode": workflow_mode,
+                    },
+                }
+            )
+            linked_thesis_doc = await thesis_service.create_thesis(current_user["id"], create_payload)
+            linked_thesis_id = linked_thesis_doc.get("_id")
+        if linked_thesis_doc:
+            position_fields.update(
+                {
+                    "thesis_id": linked_thesis_id,
+                    "stop_loss": linked_thesis_doc.get("stop_loss"),
+                    "target_price": linked_thesis_doc.get("target_price"),
+                    "min_hold_days": linked_thesis_doc.get("min_hold_days"),
+                    "current_health": payload.current_health or linked_thesis_doc.get("thesis_health"),
+                }
+            )
 
     # 8. 执行买卖逻辑
     if side == "buy":
@@ -424,9 +502,18 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
                 "available_qty": qty if market != "CN" else 0,  # A股T+1，今天买入不可用
                 "frozen_qty": 0,
                 "avg_cost": price,
-                "updated_at": now_iso
+                "status": "active",
+                "opened_at": now_iso,
+                "updated_at": now_iso,
+                **{k: v for k, v in position_fields.items() if v is not None},
             }
-            await db["paper_positions"].insert_one(new_pos)
+            position_result = await db["paper_positions"].insert_one(new_pos)
+            if linked_thesis_id:
+                await thesis_service.activate_thesis(
+                    current_user["id"],
+                    linked_thesis_id,
+                    ActivateThesisRequest(position_id=str(position_result.inserted_id)),
+                )
         else:
             old_qty = int(pos.get("quantity", 0))
             old_cost = float(pos.get("avg_cost", 0.0))
@@ -445,9 +532,17 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
                     "quantity": new_qty,
                     "available_qty": new_available,
                     "avg_cost": new_avg,
-                    "updated_at": now_iso
+                    "status": "active",
+                    "updated_at": now_iso,
+                    **{k: v for k, v in position_fields.items() if v is not None},
                 }}
             )
+            if linked_thesis_id:
+                await thesis_service.activate_thesis(
+                    current_user["id"],
+                    linked_thesis_id,
+                    ActivateThesisRequest(position_id=str(pos["_id"])),
+                )
 
     else:  # sell
         # 检查可用数量（考虑T+1）
@@ -479,7 +574,20 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
 
         # 更新持仓
         if new_qty == 0:
-            await db["paper_positions"].delete_one({"_id": pos["_id"]})
+            await db["paper_positions"].update_one(
+                {"_id": pos["_id"]},
+                {"$set": {
+                    "quantity": 0,
+                    "available_qty": 0,
+                    "status": "closed",
+                    "closed_at": now_iso,
+                    "close_reason": payload.close_reason or "manual_exit",
+                    "close_price": price,
+                    "realized_pnl": round(float(pos.get("realized_pnl", 0.0) or 0.0) + realized_pnl_delta, 2),
+                    "current_health": payload.current_health or pos.get("current_health"),
+                    "updated_at": now_iso,
+                }}
+            )
         else:
             new_available = max(0, pos.get("available_qty", old_qty) - qty)
             await db["paper_positions"].update_one(
@@ -487,8 +595,18 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
                 {"$set": {
                     "quantity": new_qty,
                     "available_qty": new_available,
+                    "current_health": payload.current_health or pos.get("current_health"),
                     "updated_at": now_iso
                 }}
+            )
+        if pos and pos.get("thesis_id") and new_qty == 0:
+            await thesis_service.close_thesis(
+                current_user["id"],
+                pos["thesis_id"],
+                CloseThesisRequest(
+                    reason=payload.close_reason or "manual_exit",
+                    close_position=False,
+                ),
             )
 
     # 9. 记录订单与成交（即成）
@@ -508,6 +626,10 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
     }
     if analysis_id:
         order_doc["analysis_id"] = analysis_id
+    if linked_thesis_id or (pos or {}).get("thesis_id"):
+        order_doc["thesis_id"] = linked_thesis_id or pos.get("thesis_id")
+    if workflow_mode:
+        order_doc["workflow_mode"] = workflow_mode
     await db["paper_orders"].insert_one(order_doc)
 
     trade_doc = {
@@ -525,6 +647,10 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
     }
     if analysis_id:
         trade_doc["analysis_id"] = analysis_id
+    if linked_thesis_id or (pos or {}).get("thesis_id"):
+        trade_doc["thesis_id"] = linked_thesis_id or pos.get("thesis_id")
+    if workflow_mode:
+        trade_doc["workflow_mode"] = workflow_mode
     await db["paper_trades"].insert_one(trade_doc)
 
     return ok({"order": {k: v for k, v in order_doc.items() if k != "_id"}})
@@ -534,7 +660,7 @@ async def place_order(payload: PlaceOrderRequest, current_user: dict = Depends(g
 async def list_positions(current_user: dict = Depends(get_current_user)):
     """获取持仓列表（支持多市场）"""
     db = get_mongo_db()
-    items = await db["paper_positions"].find({"user_id": current_user["id"]}).to_list(None)
+    items = await db["paper_positions"].find(_active_position_query(current_user["id"])).to_list(None)
     enriched: List[Dict[str, Any]] = []
     for p in items:
         code = p.get("code")
@@ -555,7 +681,12 @@ async def list_positions(current_user: dict = Depends(get_current_user)):
             "avg_cost": avg_cost,
             "last_price": last,
             "market_value": mkt,
-            "unrealized_pnl": None if last is None else round((last - avg_cost) * qty, 2)
+            "unrealized_pnl": None if last is None else round((last - avg_cost) * qty, 2),
+            "thesis_id": p.get("thesis_id"),
+            "stop_loss": p.get("stop_loss"),
+            "target_price": p.get("target_price"),
+            "min_hold_days": p.get("min_hold_days"),
+            "current_health": p.get("current_health"),
         })
     return ok({"items": enriched})
 

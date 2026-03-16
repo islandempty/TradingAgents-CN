@@ -18,7 +18,7 @@ def to_str_id(v: Any) -> str:
         return ""
 
 
-NotificationType = Literal['analysis', 'alert', 'system']
+NotificationType = Literal['analysis', 'alert', 'system', 'thesis_alert', 'edge_report', 'cognitive_snapshot']
 NotificationStatus = Literal['unread', 'read']
 
 
@@ -70,5 +70,4 @@ class NotificationList(BaseModel):
     total: int = 0
     page: int = 1
     page_size: int = 20
-
 

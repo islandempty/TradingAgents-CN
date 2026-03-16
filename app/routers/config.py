@@ -3,7 +3,7 @@
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -561,12 +561,13 @@ async def init_aggregator_providers(
 @router.post("/llm/providers/{provider_id}/test", response_model=dict)
 async def test_provider_api(
     provider_id: str,
+    test_model: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """测试厂家API密钥"""
     try:
         logger.info(f"🧪 收到API测试请求 - provider_id: {provider_id}")
-        result = await config_service.test_provider_api(provider_id)
+        result = await config_service.test_provider_api(provider_id, test_model=test_model)
         logger.info(f"🧪 API测试结果: {result}")
         return result
     except Exception as e:

@@ -84,3 +84,11 @@ class AgentState(MessagesState):
         RiskDebateState, "Current state of the debate on evaluating risk"
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
+    workflow_mode: Annotated[str, "legacy or investmind_v3 workflow mode"]
+    signal_bundle: Annotated[dict, "Structured change detector signal bundle"]
+    thesis_context: Annotated[dict, "Active thesis context for the current symbol"]
+    debate_verdict: Annotated[dict, "Bull/bear silo verdict"]
+    exit_decision: Annotated[dict, "Exit machine recommendation"]
+    macro_assessment: Annotated[dict, "Macro regime assessment"]
+    sector_rotation: Annotated[dict, "Sector rotation assessment"]
+    cognitive_trace: Annotated[dict, "Cognitive mirror trace"]

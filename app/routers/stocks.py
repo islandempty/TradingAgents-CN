@@ -150,6 +150,10 @@ async def get_quote(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到该股票的任何信息")
 
     close = (q or {}).get("close")
+    if close is None:
+        close = (q or {}).get("price")
+    if close is None:
+        close = (q or {}).get("current_price")
     pct = (q or {}).get("pct_chg")
     pre_close_saved = (q or {}).get("pre_close")
     prev_close = pre_close_saved
@@ -747,4 +751,3 @@ async def get_news(code: str, days: int = 30, limit: int = 50, include_announcem
                 "items": []
             }
             return ok(data)
-

@@ -716,6 +716,8 @@ class AKShareProvider(BaseStockDataProvider):
         if not self.connected:
             return None
 
+        from datetime import datetime, timezone, timedelta
+
         try:
             logger.info(f"📈 使用 stock_bid_ask_em 接口获取 {code} 实时行情...")
 
@@ -745,7 +747,6 @@ class AKShareProvider(BaseStockDataProvider):
             # 前端查询使用的是 high/low/open，不是 high_price/low_price/open_price
 
             # 🔥 获取当前日期（UTC+8）
-            from datetime import datetime, timezone, timedelta
             cn_tz = timezone(timedelta(hours=8))
             now_cn = datetime.now(cn_tz)
             trade_date = now_cn.strftime("%Y-%m-%d")  # 格式：2025-11-05
@@ -794,7 +795,47 @@ class AKShareProvider(BaseStockDataProvider):
 
         except Exception as e:
             logger.error(f"❌ 获取{code}实时行情失败: {e}", exc_info=True)
-            return None
+            logger.info(f"🔄 回退到全市场快照接口获取 {code} 实时行情")
+            fallback_data = await self._get_realtime_quotes_data(code)
+            if not fallback_data:
+                return None
+
+            cn_tz = timezone(timedelta(hours=8))
+            now_cn = datetime.now(cn_tz)
+            price = self._safe_float(fallback_data.get("price", 0))
+            quotes = {
+                "code": code,
+                "symbol": code,
+                "name": fallback_data.get("name", f"股票{code}"),
+                "price": price,
+                "close": price,
+                "current_price": price,
+                "change": self._safe_float(fallback_data.get("change", 0)),
+                "change_percent": self._safe_float(fallback_data.get("change_percent", 0)),
+                "pct_chg": self._safe_float(fallback_data.get("change_percent", 0)),
+                "volume": self._safe_int(fallback_data.get("volume", 0)),
+                "amount": self._safe_float(fallback_data.get("amount", 0)),
+                "open": self._safe_float(fallback_data.get("open", 0)),
+                "high": self._safe_float(fallback_data.get("high", 0)),
+                "low": self._safe_float(fallback_data.get("low", 0)),
+                "pre_close": self._safe_float(fallback_data.get("pre_close", 0)),
+                "turnover_rate": self._safe_float(fallback_data.get("turnover_rate", None)),
+                "volume_ratio": self._safe_float(fallback_data.get("volume_ratio", None)),
+                "pe": self._safe_float(fallback_data.get("pe", None)),
+                "pe_ttm": self._safe_float(fallback_data.get("pe_ttm", fallback_data.get("pe", None))),
+                "pb": self._safe_float(fallback_data.get("pb", None)),
+                "total_mv": self._safe_float(fallback_data.get("total_mv", None)),
+                "circ_mv": self._safe_float(fallback_data.get("circ_mv", None)),
+                "trade_date": now_cn.strftime("%Y-%m-%d"),
+                "updated_at": now_cn.isoformat(),
+                "full_symbol": self._get_full_symbol(code),
+                "market_info": self._get_market_info(code),
+                "data_source": "akshare",
+                "last_sync": datetime.now(timezone.utc),
+                "sync_status": "success",
+            }
+            logger.info(f"✅ 使用全市场快照回退获取 {code} 实时行情成功: 最新价={quotes['price']}")
+            return quotes
     
     async def _get_realtime_quotes_data(self, code: str) -> Dict[str, Any]:
         """获取实时行情数据"""

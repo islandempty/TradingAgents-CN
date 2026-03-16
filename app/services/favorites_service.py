@@ -48,6 +48,10 @@ class FavoritesService:
             "notes": favorite.get("notes", ""),
             "alert_price_high": favorite.get("alert_price_high"),
             "alert_price_low": favorite.get("alert_price_low"),
+            "watch_reason": favorite.get("watch_reason"),
+            "signal_confidence": favorite.get("signal_confidence"),
+            "linked_thesis_id": favorite.get("linked_thesis_id"),
+            "watch_status": favorite.get("watch_status"),
             # 行情占位，稍后填充
             "current_price": None,
             "change_percent": None,
@@ -160,7 +164,11 @@ class FavoritesService:
         tags: List[str] = None,
         notes: str = "",
         alert_price_high: Optional[float] = None,
-        alert_price_low: Optional[float] = None
+        alert_price_low: Optional[float] = None,
+        watch_reason: Optional[str] = None,
+        signal_confidence: Optional[float] = None,
+        linked_thesis_id: Optional[str] = None,
+        watch_status: Optional[str] = None,
     ) -> bool:
         """添加股票到自选股（兼容字符串ID与ObjectId）"""
         import logging
@@ -180,7 +188,11 @@ class FavoritesService:
                 "tags": tags or [],
                 "notes": notes,
                 "alert_price_high": alert_price_high,
-                "alert_price_low": alert_price_low
+                "alert_price_low": alert_price_low,
+                "watch_reason": watch_reason,
+                "signal_confidence": signal_confidence,
+                "linked_thesis_id": linked_thesis_id,
+                "watch_status": watch_status,
             }
 
             logger.info(f"🔧 [add_favorite] 自选股数据构建完成: {favorite_stock}")
@@ -267,7 +279,11 @@ class FavoritesService:
         tags: Optional[List[str]] = None,
         notes: Optional[str] = None,
         alert_price_high: Optional[float] = None,
-        alert_price_low: Optional[float] = None
+        alert_price_low: Optional[float] = None,
+        watch_reason: Optional[str] = None,
+        signal_confidence: Optional[float] = None,
+        linked_thesis_id: Optional[str] = None,
+        watch_status: Optional[str] = None,
     ) -> bool:
         """更新自选股信息（兼容字符串ID与ObjectId）"""
         db = await self._get_db()
@@ -284,6 +300,14 @@ class FavoritesService:
             update_fields[prefix + "alert_price_high"] = alert_price_high
         if alert_price_low is not None:
             update_fields[prefix + "alert_price_low"] = alert_price_low
+        if watch_reason is not None:
+            update_fields[prefix + "watch_reason"] = watch_reason
+        if signal_confidence is not None:
+            update_fields[prefix + "signal_confidence"] = signal_confidence
+        if linked_thesis_id is not None:
+            update_fields[prefix + "linked_thesis_id"] = linked_thesis_id
+        if watch_status is not None:
+            update_fields[prefix + "watch_status"] = watch_status
 
         if not update_fields:
             return True

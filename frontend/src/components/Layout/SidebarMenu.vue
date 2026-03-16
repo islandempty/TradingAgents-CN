@@ -42,9 +42,24 @@
       <template #title>我的自选股</template>
     </el-menu-item>
 
+    <el-menu-item index="/thesis">
+      <el-icon><Collection /></el-icon>
+      <template #title>Thesis</template>
+    </el-menu-item>
+
     <el-menu-item index="/paper">
       <el-icon><CreditCard /></el-icon>
       <template #title>模拟交易</template>
+    </el-menu-item>
+
+    <el-menu-item index="/edge-discovery">
+      <el-icon><DataBoard /></el-icon>
+      <template #title>Edge Discovery</template>
+    </el-menu-item>
+
+    <el-menu-item index="/cognitive-mirror">
+      <el-icon><View /></el-icon>
+      <template #title>Cognitive Mirror</template>
     </el-menu-item>
 
 
@@ -108,7 +123,10 @@ import {
   TrendCharts,
   Search,
   Star,
+  Collection,
   List,
+  DataBoard,
+  View,
   /* Document 移除：不再使用顶级分析报告菜单图标 */
   Setting,
   InfoFilled,

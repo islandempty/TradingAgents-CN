@@ -32,6 +32,16 @@ from app.services.config_service import ConfigService
 from app.services.memory_state_manager import get_memory_state_manager, TaskStatus
 from app.services.redis_progress_tracker import RedisProgressTracker, get_progress_by_id
 from app.services.progress_log_handler import register_analysis_tracker, unregister_analysis_tracker
+from app.services.model_resolver import (
+    DEFAULT_DEEP_MODEL,
+    DEFAULT_QUICK_MODEL,
+    get_default_backend_url,
+    get_default_provider_by_model,
+    get_env_api_key_for_provider,
+    resolve_model_endpoint,
+    resolve_model_endpoint_sync,
+    resolve_model_pair_sync,
+)
 
 # 股票基础信息获取（用于补充显示名称）
 try:
@@ -51,320 +61,52 @@ config_service = ConfigService()
 
 
 async def get_provider_by_model_name(model_name: str) -> str:
-    """
-    根据模型名称从数据库配置中查找对应的供应商（异步版本）
-
-    Args:
-        model_name: 模型名称，如 'qwen-turbo', 'gpt-4' 等
-
-    Returns:
-        str: 供应商名称，如 'dashscope', 'openai' 等
-    """
+    """兼容旧调用，实际委托统一 model_resolver。"""
     try:
-        # 从配置服务获取系统配置
-        system_config = await config_service.get_system_config()
-        if not system_config or not system_config.llm_configs:
-            logger.warning(f"⚠️ 系统配置为空，使用默认供应商映射")
-            return _get_default_provider_by_model(model_name)
-
-        # 在LLM配置中查找匹配的模型
-        for llm_config in system_config.llm_configs:
-            if llm_config.model_name == model_name:
-                provider = llm_config.provider.value if hasattr(llm_config.provider, 'value') else str(llm_config.provider)
-                logger.info(f"✅ 从数据库找到模型 {model_name} 的供应商: {provider}")
-                return provider
-
-        # 如果数据库中没有找到，使用默认映射
-        logger.warning(f"⚠️ 数据库中未找到模型 {model_name}，使用默认映射")
-        return _get_default_provider_by_model(model_name)
-
+        endpoint = await resolve_model_endpoint(model_name or DEFAULT_QUICK_MODEL)
+        return endpoint.provider
     except Exception as e:
         logger.error(f"❌ 查找模型供应商失败: {e}")
-        return _get_default_provider_by_model(model_name)
+        return get_default_provider_by_model(model_name or DEFAULT_QUICK_MODEL)
 
 
 def get_provider_by_model_name_sync(model_name: str) -> str:
-    """
-    根据模型名称从数据库配置中查找对应的供应商（同步版本）
-
-    Args:
-        model_name: 模型名称，如 'qwen-turbo', 'gpt-4' 等
-
-    Returns:
-        str: 供应商名称，如 'dashscope', 'openai' 等
-    """
+    """兼容旧调用，实际委托统一 model_resolver。"""
     provider_info = get_provider_and_url_by_model_sync(model_name)
     return provider_info["provider"]
 
 
 def get_provider_and_url_by_model_sync(model_name: str) -> dict:
-    """
-    根据模型名称从数据库配置中查找对应的供应商和 API URL（同步版本）
-
-    Args:
-        model_name: 模型名称，如 'qwen-turbo', 'gpt-4' 等
-
-    Returns:
-        dict: {"provider": "google", "backend_url": "https://...", "api_key": "xxx"}
-    """
+    """兼容旧调用，实际委托统一 model_resolver。"""
     try:
-        # 使用同步 MongoDB 客户端直接查询
-        from pymongo import MongoClient
-        from app.core.config import settings
-        import os
-
-        client = MongoClient(settings.MONGO_URI)
-        db = client[settings.MONGO_DB]
-
-        # 查询最新的活跃配置
-        configs_collection = db.system_configs
-        doc = configs_collection.find_one({"is_active": True}, sort=[("version", -1)])
-
-        if doc and "llm_configs" in doc:
-            llm_configs = doc["llm_configs"]
-
-            for config_dict in llm_configs:
-                if config_dict.get("model_name") == model_name:
-                    provider = config_dict.get("provider")
-                    api_base = config_dict.get("api_base")
-                    model_api_key = config_dict.get("api_key")  # 🔥 获取模型配置的 API Key
-
-                    # 从 llm_providers 集合中查找厂家配置
-                    providers_collection = db.llm_providers
-                    provider_doc = providers_collection.find_one({"name": provider})
-
-                    # 🔥 确定 API Key（优先级：模型配置 > 厂家配置 > 环境变量）
-                    api_key = None
-                    if model_api_key and model_api_key.strip() and model_api_key != "your-api-key":
-                        api_key = model_api_key
-                        logger.info(f"✅ [同步查询] 使用模型配置的 API Key")
-                    elif provider_doc and provider_doc.get("api_key"):
-                        provider_api_key = provider_doc["api_key"]
-                        if provider_api_key and provider_api_key.strip() and provider_api_key != "your-api-key":
-                            api_key = provider_api_key
-                            logger.info(f"✅ [同步查询] 使用厂家配置的 API Key")
-
-                    # 如果数据库中没有有效的 API Key，尝试从环境变量获取
-                    if not api_key:
-                        api_key = _get_env_api_key_for_provider(provider)
-                        if api_key:
-                            logger.info(f"✅ [同步查询] 使用环境变量的 API Key")
-                        else:
-                            logger.warning(f"⚠️ [同步查询] 未找到 {provider} 的 API Key")
-
-                    # 确定 backend_url
-                    backend_url = None
-                    if api_base:
-                        backend_url = api_base
-                        logger.info(f"✅ [同步查询] 模型 {model_name} 使用自定义 API: {api_base}")
-                    elif provider_doc and provider_doc.get("default_base_url"):
-                        backend_url = provider_doc["default_base_url"]
-                        logger.info(f"✅ [同步查询] 模型 {model_name} 使用厂家默认 API: {backend_url}")
-                    else:
-                        backend_url = _get_default_backend_url(provider)
-                        logger.warning(f"⚠️ [同步查询] 厂家 {provider} 没有配置 default_base_url，使用硬编码默认值")
-
-                    client.close()
-                    return {
-                        "provider": provider,
-                        "backend_url": backend_url,
-                        "api_key": api_key
-                    }
-
-        client.close()
-
-        # 如果数据库中没有找到模型配置，使用默认映射
-        logger.warning(f"⚠️ [同步查询] 数据库中未找到模型 {model_name}，使用默认映射")
-        provider = _get_default_provider_by_model(model_name)
-
-        # 尝试从厂家配置中获取 default_base_url 和 API Key
-        try:
-            client = MongoClient(settings.MONGO_URI)
-            db = client[settings.MONGO_DB]
-            providers_collection = db.llm_providers
-            provider_doc = providers_collection.find_one({"name": provider})
-
-            backend_url = _get_default_backend_url(provider)
-            api_key = None
-
-            if provider_doc:
-                if provider_doc.get("default_base_url"):
-                    backend_url = provider_doc["default_base_url"]
-                    logger.info(f"✅ [同步查询] 使用厂家 {provider} 的 default_base_url: {backend_url}")
-
-                if provider_doc.get("api_key"):
-                    provider_api_key = provider_doc["api_key"]
-                    if provider_api_key and provider_api_key.strip() and provider_api_key != "your-api-key":
-                        api_key = provider_api_key
-                        logger.info(f"✅ [同步查询] 使用厂家 {provider} 的 API Key")
-
-            # 如果厂家配置中没有 API Key，尝试从环境变量获取
-            if not api_key:
-                api_key = _get_env_api_key_for_provider(provider)
-                if api_key:
-                    logger.info(f"✅ [同步查询] 使用环境变量的 API Key")
-
-            client.close()
-            return {
-                "provider": provider,
-                "backend_url": backend_url,
-                "api_key": api_key
-            }
-        except Exception as e:
-            logger.warning(f"⚠️ [同步查询] 无法查询厂家配置: {e}")
-
-        # 最后回退到硬编码的默认 URL 和环境变量 API Key
+        endpoint = resolve_model_endpoint_sync(model_name or DEFAULT_QUICK_MODEL)
         return {
-            "provider": provider,
-            "backend_url": _get_default_backend_url(provider),
-            "api_key": _get_env_api_key_for_provider(provider)
+            "provider": endpoint.provider,
+            "backend_url": endpoint.api_base,
+            "api_key": endpoint.api_key
         }
-
     except Exception as e:
         logger.error(f"❌ [同步查询] 查找模型供应商失败: {e}")
-        provider = _get_default_provider_by_model(model_name)
-
-        # 尝试从厂家配置中获取 default_base_url 和 API Key
-        try:
-            from pymongo import MongoClient
-            from app.core.config import settings
-
-            client = MongoClient(settings.MONGO_URI)
-            db = client[settings.MONGO_DB]
-            providers_collection = db.llm_providers
-            provider_doc = providers_collection.find_one({"name": provider})
-
-            backend_url = _get_default_backend_url(provider)
-            api_key = None
-
-            if provider_doc:
-                if provider_doc.get("default_base_url"):
-                    backend_url = provider_doc["default_base_url"]
-                    logger.info(f"✅ [同步查询] 使用厂家 {provider} 的 default_base_url: {backend_url}")
-
-                if provider_doc.get("api_key"):
-                    provider_api_key = provider_doc["api_key"]
-                    if provider_api_key and provider_api_key.strip() and provider_api_key != "your-api-key":
-                        api_key = provider_api_key
-                        logger.info(f"✅ [同步查询] 使用厂家 {provider} 的 API Key")
-
-            # 如果厂家配置中没有 API Key，尝试从环境变量获取
-            if not api_key:
-                api_key = _get_env_api_key_for_provider(provider)
-
-            client.close()
-            return {
-                "provider": provider,
-                "backend_url": backend_url,
-                "api_key": api_key
-            }
-        except Exception as e2:
-            logger.warning(f"⚠️ [同步查询] 无法查询厂家配置: {e2}")
-
-        # 最后回退到硬编码的默认 URL 和环境变量 API Key
+        provider = get_default_provider_by_model(model_name or DEFAULT_QUICK_MODEL)
         return {
             "provider": provider,
-            "backend_url": _get_default_backend_url(provider),
-            "api_key": _get_env_api_key_for_provider(provider)
+            "backend_url": get_default_backend_url(provider),
+            "api_key": get_env_api_key_for_provider(provider)
         }
 
 
 def _get_env_api_key_for_provider(provider: str) -> str:
-    """
-    从环境变量获取指定供应商的 API Key
-
-    Args:
-        provider: 供应商名称，如 'google', 'dashscope' 等
-
-    Returns:
-        str: API Key，如果未找到则返回 None
-    """
-    import os
-
-    env_key_map = {
-        "google": "GOOGLE_API_KEY",
-        "dashscope": "DASHSCOPE_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "deepseek": "DEEPSEEK_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-        "siliconflow": "SILICONFLOW_API_KEY",
-        "qianfan": "QIANFAN_API_KEY",
-        "302ai": "AI302_API_KEY",
-    }
-
-    env_key_name = env_key_map.get(provider.lower())
-    if env_key_name:
-        api_key = os.getenv(env_key_name)
-        if api_key and api_key.strip() and api_key != "your-api-key":
-            return api_key
-
-    return None
+    return get_env_api_key_for_provider(provider)
 
 
 def _get_default_backend_url(provider: str) -> str:
-    """
-    根据供应商名称返回默认的 backend_url
-
-    Args:
-        provider: 供应商名称，如 'google', 'dashscope' 等
-
-    Returns:
-        str: 默认的 backend_url
-    """
-    default_urls = {
-        "google": "https://generativelanguage.googleapis.com/v1beta",
-        "dashscope": "https://dashscope.aliyuncs.com/api/v1",
-        "openai": "https://api.openai.com/v1",
-        "deepseek": "https://api.deepseek.com",
-        "anthropic": "https://api.anthropic.com",
-        "openrouter": "https://openrouter.ai/api/v1",
-        "qianfan": "https://qianfan.baidubce.com/v2",
-        "302ai": "https://api.302.ai/v1",
-    }
-
-    url = default_urls.get(provider, "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    url = get_default_backend_url(provider)
     logger.info(f"🔧 [默认URL] {provider} -> {url}")
     return url
 
 
 def _get_default_provider_by_model(model_name: str) -> str:
-    """
-    根据模型名称返回默认的供应商映射
-    这是一个后备方案，当数据库查询失败时使用
-    """
-    # 模型名称到供应商的默认映射
-    model_provider_map = {
-        # 阿里百炼 (DashScope)
-        'qwen-turbo': 'dashscope',
-        'qwen-plus': 'dashscope',
-        'qwen-max': 'dashscope',
-        'qwen-plus-latest': 'dashscope',
-        'qwen-max-longcontext': 'dashscope',
-
-        # OpenAI
-        'gpt-3.5-turbo': 'openai',
-        'gpt-4': 'openai',
-        'gpt-4-turbo': 'openai',
-        'gpt-4o': 'openai',
-        'gpt-4o-mini': 'openai',
-
-        # Google
-        'gemini-pro': 'google',
-        'gemini-2.0-flash': 'google',
-        'gemini-2.0-flash-thinking-exp': 'google',
-
-        # DeepSeek
-        'deepseek-chat': 'deepseek',
-        'deepseek-coder': 'deepseek',
-
-        # 智谱AI
-        'glm-4': 'zhipu',
-        'glm-3-turbo': 'zhipu',
-        'chatglm3-6b': 'zhipu'
-    }
-
-    provider = model_provider_map.get(model_name, 'dashscope')  # 默认使用阿里百炼
+    provider = get_default_provider_by_model(model_name or DEFAULT_QUICK_MODEL)
     logger.info(f"🔧 使用默认映射: {model_name} -> {provider}")
     return provider
 
@@ -440,9 +182,22 @@ def create_analysis_config(
 
     # 从DEFAULT_CONFIG开始，完全复制web目录的逻辑
     config = DEFAULT_CONFIG.copy()
-    config["llm_provider"] = llm_provider
-    config["deep_think_llm"] = deep_model
-    config["quick_think_llm"] = quick_model
+    resolved_models = resolve_model_pair_sync(
+        quick_model or DEFAULT_QUICK_MODEL,
+        deep_model or DEFAULT_DEEP_MODEL,
+    )
+    quick_endpoint = resolved_models.quick
+    deep_endpoint = resolved_models.deep
+    config["llm_provider"] = quick_endpoint.provider or llm_provider
+    config["deep_think_llm"] = deep_endpoint.model_name
+    config["quick_think_llm"] = quick_endpoint.model_name
+    config["quick_provider"] = quick_endpoint.provider
+    config["deep_provider"] = deep_endpoint.provider
+    config["quick_backend_url"] = quick_endpoint.api_base
+    config["deep_backend_url"] = deep_endpoint.api_base
+    config["backend_url"] = quick_endpoint.api_base
+    config["quick_api_key"] = quick_endpoint.api_key
+    config["deep_api_key"] = deep_endpoint.api_key
 
     # 根据研究深度调整配置 - 支持5个级别（与Web界面保持一致）
     if research_depth == "快速":
@@ -498,59 +253,11 @@ def create_analysis_config(
         config["memory_enabled"] = True
         config["online_tools"] = True
 
-    # 🔧 获取 backend_url 和 API Key（优先级：模型配置 > 厂家配置 > 环境变量）
-    try:
-        # 1️⃣ 优先从数据库获取（包含模型配置的 api_base、API Key 和厂家的 default_base_url、API Key）
-        quick_provider_info = get_provider_and_url_by_model_sync(quick_model)
-        deep_provider_info = get_provider_and_url_by_model_sync(deep_model)
-
-        config["backend_url"] = quick_provider_info["backend_url"]
-        config["quick_api_key"] = quick_provider_info.get("api_key")  # 🔥 保存快速模型的 API Key
-        config["deep_api_key"] = deep_provider_info.get("api_key")    # 🔥 保存深度模型的 API Key
-
-        logger.info(f"✅ 使用数据库配置的 backend_url: {quick_provider_info['backend_url']}")
-        logger.info(f"   来源: 模型 {quick_model} 的配置或厂家 {quick_provider_info['provider']} 的默认地址")
-        logger.info(f"🔑 快速模型 API Key: {'已配置' if config['quick_api_key'] else '未配置（将使用环境变量）'}")
-        logger.info(f"🔑 深度模型 API Key: {'已配置' if config['deep_api_key'] else '未配置（将使用环境变量）'}")
-    except Exception as e:
-        logger.warning(f"⚠️  无法从数据库获取 backend_url 和 API Key: {e}")
-        # 2️⃣ 回退到硬编码的默认 URL，API Key 将从环境变量读取
-        if llm_provider == "dashscope":
-            config["backend_url"] = "https://dashscope.aliyuncs.com/api/v1"
-        elif llm_provider == "deepseek":
-            config["backend_url"] = "https://api.deepseek.com"
-        elif llm_provider == "openai":
-            config["backend_url"] = "https://api.openai.com/v1"
-        elif llm_provider == "google":
-            config["backend_url"] = "https://generativelanguage.googleapis.com/v1beta"
-        elif llm_provider == "qianfan":
-            config["backend_url"] = "https://aip.baidubce.com"
-        else:
-            # 🔧 未知厂家，尝试从数据库获取厂家的 default_base_url
-            logger.warning(f"⚠️  未知厂家 {llm_provider}，尝试从数据库获取配置")
-            try:
-                from pymongo import MongoClient
-                from app.core.config import settings
-
-                client = MongoClient(settings.MONGO_URI)
-                db = client[settings.MONGO_DB]
-                providers_collection = db.llm_providers
-                provider_doc = providers_collection.find_one({"name": llm_provider})
-
-                if provider_doc and provider_doc.get("default_base_url"):
-                    config["backend_url"] = provider_doc["default_base_url"]
-                    logger.info(f"✅ 从数据库获取自定义厂家 {llm_provider} 的 backend_url: {config['backend_url']}")
-                else:
-                    # 如果数据库中也没有，使用 OpenAI 兼容格式作为最后的回退
-                    config["backend_url"] = "https://api.openai.com/v1"
-                    logger.warning(f"⚠️  数据库中未找到厂家 {llm_provider} 的配置，使用默认 OpenAI 端点")
-
-                client.close()
-            except Exception as e2:
-                logger.error(f"❌ 查询数据库失败: {e2}，使用默认 OpenAI 端点")
-                config["backend_url"] = "https://api.openai.com/v1"
-
-        logger.info(f"⚠️  使用回退的 backend_url: {config['backend_url']}")
+    logger.info(f"✅ 使用统一模型解析器完成 provider/base_url/api_key 解析")
+    logger.info(f"   快速模型: {quick_endpoint.model_name} ({quick_endpoint.provider})")
+    logger.info(f"   深度模型: {deep_endpoint.model_name} ({deep_endpoint.provider})")
+    logger.info(f"🔑 快速模型 API Key: {'已配置' if config['quick_api_key'] else '未配置（将使用环境变量）'}")
+    logger.info(f"🔑 深度模型 API Key: {'已配置' if config['deep_api_key'] else '未配置（将使用环境变量）'}")
 
     # 添加分析师配置
     config["selected_analysts"] = selected_analysts
@@ -901,11 +608,14 @@ class SimpleAnalysisService:
             def create_progress_tracker():
                 """在线程中创建进度跟踪器"""
                 logger.info(f"📊 [线程] 创建进度跟踪器: {task_id}")
+                quick_provider = get_provider_by_model_name_sync(
+                    (request.parameters.quick_analysis_model if request.parameters else None) or DEFAULT_QUICK_MODEL
+                )
                 tracker = RedisProgressTracker(
                     task_id=task_id,
                     analysts=request.parameters.selected_analysts or ["market", "fundamentals"],
                     research_depth=request.parameters.research_depth or "标准",
-                    llm_provider="dashscope"
+                    llm_provider=quick_provider
                 )
                 logger.info(f"✅ [线程] 进度跟踪器创建完成: {task_id}")
                 return tracker
@@ -1241,6 +951,10 @@ class SimpleAnalysisService:
                 llm_provider=quick_provider,  # 主要使用快速模型的供应商
                 market_type=market_type  # 使用前端传递的市场类型
             )
+            config["workflow_mode"] = getattr(request.parameters, "workflow_mode", "legacy") if request.parameters else "legacy"
+            config["thesis_id"] = getattr(request.parameters, "thesis_id", None) if request.parameters else None
+            config["position_id"] = getattr(request.parameters, "position_id", None) if request.parameters else None
+            config["user_id"] = user_id
 
             # 🔧 添加混合模式配置
             config["quick_provider"] = quick_provider
@@ -1805,7 +1519,14 @@ class SimpleAnalysisService:
                 # 🔥 添加模型信息字段
                 "model_info": model_info,
                 # 🆕 性能指标数据
-                "performance_metrics": state.get("performance_metrics", {}) if isinstance(state, dict) else {}
+                "performance_metrics": state.get("performance_metrics", {}) if isinstance(state, dict) else {},
+                "thesis": decision.get("thesis") if isinstance(decision, dict) else None,
+                "thesis_health": decision.get("thesis_health") if isinstance(decision, dict) else None,
+                "debate_verdict": decision.get("debate_verdict") if isinstance(decision, dict) else None,
+                "exit_decision": decision.get("exit_decision") if isinstance(decision, dict) else None,
+                "macro_assessment": decision.get("macro_assessment") if isinstance(decision, dict) else None,
+                "sector_rotation": decision.get("sector_rotation") if isinstance(decision, dict) else None,
+                "cognitive_mirror": decision.get("cognitive_mirror") if isinstance(decision, dict) else None,
             }
 
             logger.info(f"✅ [线程池] 分析完成: {task_id} - 耗时{execution_time:.2f}秒")

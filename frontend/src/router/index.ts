@@ -115,6 +115,72 @@ const routes: RouteRecordRaw[] = [
     ]
   },
   {
+    path: '/thesis',
+    name: 'Thesis',
+    component: () => import('@/layouts/BasicLayout.vue'),
+    meta: {
+      title: 'Thesis',
+      icon: 'Collection',
+      requiresAuth: true,
+      transition: 'slide-up'
+    },
+    children: [
+      {
+        path: '',
+        name: 'ThesisHome',
+        component: () => import('@/views/Thesis/index.vue'),
+        meta: {
+          title: 'Thesis',
+          requiresAuth: true
+        }
+      }
+    ]
+  },
+  {
+    path: '/edge-discovery',
+    name: 'EdgeDiscovery',
+    component: () => import('@/layouts/BasicLayout.vue'),
+    meta: {
+      title: 'Edge Discovery',
+      icon: 'DataBoard',
+      requiresAuth: true,
+      transition: 'slide-up'
+    },
+    children: [
+      {
+        path: '',
+        name: 'EdgeDiscoveryHome',
+        component: () => import('@/views/EdgeDiscovery/index.vue'),
+        meta: {
+          title: 'Edge Discovery',
+          requiresAuth: true
+        }
+      }
+    ]
+  },
+  {
+    path: '/cognitive-mirror',
+    name: 'CognitiveMirror',
+    component: () => import('@/layouts/BasicLayout.vue'),
+    meta: {
+      title: 'Cognitive Mirror',
+      icon: 'View',
+      requiresAuth: true,
+      transition: 'slide-up'
+    },
+    children: [
+      {
+        path: '',
+        name: 'CognitiveMirrorHome',
+        component: () => import('@/views/CognitiveMirror/index.vue'),
+        meta: {
+          title: 'Cognitive Mirror',
+          requiresAuth: true
+        }
+      }
+    ]
+  },
+  {
     path: '/learning',
     name: 'Learning',
     component: () => import('@/layouts/BasicLayout.vue'),
@@ -398,7 +464,7 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
-  scrollBehavior(to, from, savedPosition) {
+  scrollBehavior(_to, _from, savedPosition) {
     if (savedPosition) {
       return savedPosition
     } else {
@@ -408,7 +474,7 @@ const router = createRouter({
 })
 
 // 全局前置守卫
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
   // 开始进度条
   NProgress.start()
 
@@ -458,7 +524,7 @@ router.beforeEach(async (to, from, next) => {
 })
 
 // 全局后置守卫
-router.afterEach((to, from) => {
+router.afterEach((_to, _from) => {
   // 结束进度条
   NProgress.done()
 

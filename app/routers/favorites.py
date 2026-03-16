@@ -26,6 +26,10 @@ class AddFavoriteRequest(BaseModel):
     notes: str = ""
     alert_price_high: Optional[float] = None
     alert_price_low: Optional[float] = None
+    watch_reason: Optional[str] = None
+    signal_confidence: Optional[float] = None
+    linked_thesis_id: Optional[str] = None
+    watch_status: Optional[str] = None
 
 
 class UpdateFavoriteRequest(BaseModel):
@@ -34,6 +38,10 @@ class UpdateFavoriteRequest(BaseModel):
     notes: Optional[str] = None
     alert_price_high: Optional[float] = None
     alert_price_low: Optional[float] = None
+    watch_reason: Optional[str] = None
+    signal_confidence: Optional[float] = None
+    linked_thesis_id: Optional[str] = None
+    watch_status: Optional[str] = None
 
 
 class FavoriteStockResponse(BaseModel):
@@ -50,6 +58,10 @@ class FavoriteStockResponse(BaseModel):
     current_price: Optional[float] = None
     change_percent: Optional[float] = None
     volume: Optional[int] = None
+    watch_reason: Optional[str] = None
+    signal_confidence: Optional[float] = None
+    linked_thesis_id: Optional[str] = None
+    watch_status: Optional[str] = None
 
 
 @router.get("/", response_model=dict)
@@ -100,7 +112,11 @@ async def add_favorite(
             tags=request.tags,
             notes=request.notes,
             alert_price_high=request.alert_price_high,
-            alert_price_low=request.alert_price_low
+            alert_price_low=request.alert_price_low,
+            watch_reason=request.watch_reason,
+            signal_confidence=request.signal_confidence,
+            linked_thesis_id=request.linked_thesis_id,
+            watch_status=request.watch_status,
         )
 
         logger.info(f"✅ 添加结果: success={success}")
@@ -138,7 +154,11 @@ async def update_favorite(
             tags=request.tags,
             notes=request.notes,
             alert_price_high=request.alert_price_high,
-            alert_price_low=request.alert_price_low
+            alert_price_low=request.alert_price_low,
+            watch_reason=request.watch_reason,
+            signal_confidence=request.signal_confidence,
+            linked_thesis_id=request.linked_thesis_id,
+            watch_status=request.watch_status,
         )
 
         if success:

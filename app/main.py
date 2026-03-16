@@ -16,7 +16,8 @@ For commercial licensing, please contact: hsliup@163.com
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 import logging
 import time
@@ -37,9 +38,19 @@ from app.routers import multi_market_stocks as multi_market_stocks_router
 from app.routers import notifications as notifications_router
 from app.routers import websocket_notifications as websocket_notifications_router
 from app.routers import scheduler as scheduler_router
+from app.routers import theses as theses_router
+from app.routers import edge_profiles as edge_profiles_router
+from app.routers import cognitive_snapshots as cognitive_snapshots_router
+from app.routers import trade_imports as trade_imports_router
 from app.services.basics_sync_service import get_basics_sync_service
 from app.services.multi_source_basics_sync_service import MultiSourceBasicsSyncService
 from app.services.scheduler_service import set_scheduler_instance
+from app.services.investmind_scheduler_service import (
+    run_daily_investmind_digest,
+    run_edge_refresh,
+    run_thesis_monitor_scan,
+)
+from app.services.thesis_service import thesis_service
 from app.worker.tushare_sync_service import (
     run_tushare_basic_info_sync,
     run_tushare_quotes_sync,
@@ -69,6 +80,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from app.services.quotes_ingestion_service import QuotesIngestionService
 from app.routers import paper as paper_router
+
+FRONTEND_DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
 
 def get_version() -> str:
@@ -228,6 +241,7 @@ async def lifespan(app: FastAPI):
         raise
 
     await init_db()
+    await thesis_service.ensure_indexes()
 
     #  配置桥接：将统一配置写入环境变量，供 TradingAgents 核心库使用
     try:
@@ -330,6 +344,28 @@ async def lifespan(app: FastAPI):
                 name="实时行情入库服务"
             )
             logger.info(f"⏱ 实时行情入库任务已启动: 每 {settings.QUOTES_INGEST_INTERVAL_SECONDS}s")
+
+        scheduler.add_job(
+            run_thesis_monitor_scan,
+            IntervalTrigger(minutes=15, timezone=settings.TIMEZONE),
+            id="investmind_thesis_monitor",
+            name="InvestMind Thesis 15分钟监控",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            run_daily_investmind_digest,
+            CronTrigger(hour=20, minute=0, timezone=settings.TIMEZONE),
+            id="investmind_daily_digest",
+            name="InvestMind 每日简报",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            run_edge_refresh,
+            IntervalTrigger(days=90, timezone=settings.TIMEZONE),
+            id="investmind_edge_refresh",
+            name="InvestMind 周期画像刷新",
+            replace_existing=True,
+        )
 
         # Tushare统一数据同步任务配置
         logger.info("🔄 配置Tushare统一数据同步任务...")
@@ -718,6 +754,10 @@ app.include_router(scheduler_router.router, tags=["scheduler"])
 app.include_router(sse.router, prefix="/api/stream", tags=["streaming"])
 app.include_router(sync_router.router)
 app.include_router(multi_source_sync.router)
+app.include_router(theses_router.router, prefix="/api", tags=["theses"])
+app.include_router(edge_profiles_router.router, prefix="/api", tags=["edge-profiles"])
+app.include_router(cognitive_snapshots_router.router, prefix="/api", tags=["cognitive-snapshots"])
+app.include_router(trade_imports_router.router, prefix="/api", tags=["trade-imports"])
 app.include_router(paper_router.router, prefix="/api", tags=["paper"])
 app.include_router(tushare_init.router, prefix="/api", tags=["tushare-init"])
 app.include_router(akshare_init.router, prefix="/api", tags=["akshare-init"])
@@ -730,16 +770,35 @@ app.include_router(social_media.router, tags=["social-media"])
 app.include_router(internal_messages.router, tags=["internal-messages"])
 
 
-@app.get("/")
-async def root():
-    """根路径，返回API信息"""
-    print("🏠 根路径被访问")
-    return {
-        "name": "TradingAgents-CN API",
-        "version": get_version(),
-        "status": "running",
-        "docs_url": "/docs" if settings.DEBUG else None
-    }
+if FRONTEND_DIST_DIR.exists():
+    for static_dir in ("assets", "css", "js"):
+        target_dir = FRONTEND_DIST_DIR / static_dir
+        if target_dir.exists():
+            app.mount(f"/{static_dir}", StaticFiles(directory=target_dir), name=f"frontend-{static_dir}")
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def frontend_spa(full_path: str):
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+        candidate = FRONTEND_DIST_DIR / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
+else:
+    @app.get("/")
+    async def root():
+        """根路径，返回API信息"""
+        print("🏠 根路径被访问")
+        return {
+            "name": "TradingAgents-CN API",
+            "version": get_version(),
+            "status": "running",
+            "docs_url": "/docs" if settings.DEBUG else None
+        }
 
 
 if __name__ == "__main__":

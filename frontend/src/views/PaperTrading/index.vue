@@ -114,6 +114,12 @@
             <el-table-column label="名称" width="100">
               <template #default="{ row }">{{ row.name || '-' }}</template>
             </el-table-column>
+            <el-table-column label="Thesis" width="120">
+              <template #default="{ row }">
+                <span v-if="row.thesis_id">{{ String(row.thesis_id).slice(0, 8) }}</span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="市场" width="70">
               <template #default="{ row }">
                 <el-tag v-if="row.market === 'CN'" type="success" size="small">🇨🇳 A股</el-tag>
@@ -201,6 +207,11 @@
                 <span v-else style="color: #909399;">-</span>
               </template>
             </el-table-column>
+            <el-table-column label="Workflow" width="120">
+              <template #default="{ row }">
+                {{ row.workflow_mode || 'legacy' }}
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
       </el-col>
@@ -247,6 +258,21 @@
         <el-form-item label="数量">
           <el-input-number v-model="order.qty" :min="1" />
         </el-form-item>
+        <el-form-item label="模式">
+          <el-radio-group v-model="order.workflow_mode">
+            <el-radio-button label="legacy">legacy</el-radio-button>
+            <el-radio-button label="investmind_v3">investmind_v3</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="order.side === 'buy' && order.workflow_mode === 'investmind_v3'" label="Thesis ID">
+          <el-input v-model="order.thesis_id" placeholder="已有 Thesis 可直接输入 ID" />
+        </el-form-item>
+        <el-form-item v-if="order.side === 'buy' && order.workflow_mode === 'investmind_v3'" label="自动建 Thesis">
+          <el-switch v-model="order.auto_create_thesis" />
+        </el-form-item>
+        <el-form-item v-if="order.side === 'sell'" label="退出原因">
+          <el-input v-model="order.close_reason" placeholder="manual_exit" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="orderDialog=false">取消</el-button>
@@ -277,7 +303,15 @@ const orders = ref<any[]>([])
 const loading = ref({ account: false, positions: false, orders: false })
 
 const orderDialog = ref(false)
-const order = ref({ side: 'buy', code: '', qty: 100 })
+const order = ref({
+  side: 'buy',
+  code: '',
+  qty: 100,
+  workflow_mode: 'legacy' as 'legacy' | 'investmind_v3',
+  thesis_id: '',
+  auto_create_thesis: false,
+  close_reason: 'manual_exit'
+})
 const detectedMarket = ref<string>('')
 const activeMarketTab = ref<string>('CN')
 
@@ -433,8 +467,28 @@ function openOrderDialog() {
 
 async function submitOrder() {
   try {
-    const payload: any = { side: order.value.side as 'buy' | 'sell', code: order.value.code, quantity: Number(order.value.qty) }
+    const payload: any = {
+      side: order.value.side as 'buy' | 'sell',
+      code: order.value.code,
+      quantity: Number(order.value.qty),
+      workflow_mode: order.value.workflow_mode
+    }
     if ((order.value as any).analysis_id) payload.analysis_id = (order.value as any).analysis_id
+    if (order.value.workflow_mode === 'investmind_v3' && order.value.thesis_id) {
+      payload.thesis_id = order.value.thesis_id
+    }
+    if (order.value.workflow_mode === 'investmind_v3' && order.value.side === 'buy' && !order.value.thesis_id && order.value.auto_create_thesis) {
+      payload.create_thesis_payload = {
+        symbol: order.value.code,
+        thesis_title: `${order.value.code} Thesis`,
+        thesis_summary: `${order.value.code} 的自动创建 Thesis`,
+        watch_reason: '来自模拟交易下单',
+        signal_confidence: 0.6
+      }
+    }
+    if (order.value.side === 'sell' && order.value.close_reason) {
+      payload.close_reason = order.value.close_reason
+    }
     const res = await paperApi.placeOrder(payload)
     if (res.success) {
       ElMessage.success('下单成功')
@@ -525,7 +579,9 @@ async function sellPosition(position: any) {
     const payload = {
       side: 'sell' as const,
       code: position.code,
-      quantity: position.quantity
+      quantity: position.quantity,
+      workflow_mode: (position.thesis_id ? 'investmind_v3' : 'legacy') as 'legacy' | 'investmind_v3',
+      close_reason: 'manual_exit'
     }
 
     const res = await paperApi.placeOrder(payload)

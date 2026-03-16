@@ -1,4 +1,4 @@
-import { ApiClient, type ApiResponse } from './request'
+import { ApiClient } from './request'
 
 export interface CurrencyAmount {
   CNY: number
@@ -21,6 +21,11 @@ export interface PaperPositionItem {
   last_price?: number | null
   market_value?: number
   unrealized_pnl?: number | null
+  thesis_id?: string | null
+  stop_loss?: number | null
+  target_price?: number | null
+  min_hold_days?: number | null
+  current_health?: string | null
 }
 
 export interface PaperOrderItem {
@@ -33,6 +38,8 @@ export interface PaperOrderItem {
   status: 'filled' | 'rejected' | string
   created_at: string
   filled_at?: string
+  thesis_id?: string | null
+  workflow_mode?: 'legacy' | 'investmind_v3'
 }
 
 export interface GetAccountResponse {
@@ -45,6 +52,11 @@ export interface PlaceOrderPayload {
   side: 'buy' | 'sell'
   quantity: number
   analysis_id?: string
+  workflow_mode?: 'legacy' | 'investmind_v3'
+  thesis_id?: string
+  current_health?: string
+  close_reason?: string
+  create_thesis_payload?: Record<string, any>
 }
 
 export const paperApi = {

@@ -107,6 +107,101 @@
       </div>
     </el-card>
 
+    <el-card v-if="activeThesis" class="thesis-summary-card" shadow="hover">
+      <template #header>
+        <div class="card-hd">
+          <div>InvestMind Thesis</div>
+          <el-button type="text" size="small" @click="openThesisPage">打开 Thesis</el-button>
+        </div>
+      </template>
+      <el-tabs v-model="thesisTab" class="thesis-tabs">
+        <el-tab-pane label="概览" name="summary">
+          <div class="thesis-summary">
+            <div class="item"><span>标题</span><b>{{ activeThesis.thesis_title || '-' }}</b></div>
+            <div class="item"><span>状态</span><b>{{ activeThesis.status || '-' }}</b></div>
+            <div class="item"><span>健康度</span><b>{{ Number(activeThesis.health_score || 0).toFixed(2) }}</b></div>
+            <div class="item"><span>观察原因</span><b>{{ activeThesis.watch_reason || '-' }}</b></div>
+            <div class="item"><span>最新仲裁</span><b>{{ activeThesis.latest_verdict?.winner || '-' }}</b></div>
+            <div class="item"><span>风险动作</span><b>{{ activeThesis.latest_exit_decision?.action || '-' }}</b></div>
+          </div>
+          <div v-if="activeThesis.latest_verdict?.reason" class="thesis-note">
+            {{ activeThesis.latest_verdict.reason }}
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="历史" name="versions">
+          <el-empty v-if="thesisVersions.length === 0" description="暂无版本记录" />
+          <div v-else class="thesis-list">
+            <div v-for="item in thesisVersions.slice(0, 6)" :key="item._id" class="thesis-list-item">
+              <div class="row">
+                <strong>v{{ item.version }}</strong>
+                <span>{{ formatAnalysisTime(item.created_at) }}</span>
+              </div>
+              <div class="row">
+                <span>{{ item.change_description || '-' }}</span>
+                <span :class="getHealthDeltaClass(item.health_delta)">
+                  {{ formatHealthDelta(item.health_delta) }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="辩论" name="debates">
+          <el-empty v-if="thesisDebates.length === 0" description="暂无辩论记录" />
+          <div v-else class="thesis-list">
+            <div v-for="item in thesisDebates.slice(0, 4)" :key="item._id" class="thesis-list-item">
+              <div class="row">
+                <strong>{{ item.debate_verdict?.winner || '-' }}</strong>
+                <span>{{ formatAnalysisTime(item.created_at) }}</span>
+              </div>
+              <div class="debate-grid">
+                <div>
+                  <div class="mini-title">多头</div>
+                  <div v-for="point in item.bull_case || []" :key="point" class="mini-point">{{ point }}</div>
+                </div>
+                <div>
+                  <div class="mini-title">空头</div>
+                  <div v-for="point in item.bear_case || []" :key="point" class="mini-point">{{ point }}</div>
+                </div>
+              </div>
+              <div class="thesis-note">{{ item.debate_verdict?.reason || '无仲裁说明' }}</div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="验证轨迹" name="validation">
+          <el-empty v-if="!(activeThesis.core_assumptions || []).length" description="暂无验证轨迹" />
+          <div v-else class="thesis-list">
+            <div v-for="assumption in activeThesis.core_assumptions || []" :key="assumption.id" class="thesis-list-item">
+              <div class="row">
+                <strong>{{ assumption.id }} · {{ assumption.statement }}</strong>
+                <el-tag size="small" :type="getAssumptionTagType(assumption.status)">
+                  {{ assumption.status || '-' }}
+                </el-tag>
+              </div>
+              <div class="row">
+                <span>健康度 {{ Number(assumption.health_score || 0).toFixed(2) }}</span>
+                <span>{{ formatAnalysisTime(assumption.last_checked) }}</span>
+              </div>
+              <div v-if="assumption.weakening_evidence" class="thesis-note">
+                {{ assumption.weakening_evidence }}
+              </div>
+              <div v-if="(assumption.history || []).length" class="mini-history">
+                <div
+                  v-for="entry in (assumption.history || []).slice(-2).reverse()"
+                  :key="`${entry.checked_at}-${entry.status}`"
+                  class="mini-point"
+                >
+                  {{ formatAnalysisTime(entry.checked_at) }} · {{ entry.status }} · tags={{ (entry.signal_tags || []).join(',') || '-' }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-card>
+
     <el-row :gutter="16" class="body">
       <el-col :span="18">
         <!-- K线蜡烛图 -->
@@ -185,14 +280,14 @@
               <!-- 报告列表预览 -->
               <div class="reports-preview">
                 <el-tag
-                  v-for="(content, key) in lastAnalysis.reports"
-                  :key="key"
+                  v-for="key in Object.keys(lastAnalysis.reports)"
+                  :key="String(key)"
                   size="small"
                   effect="plain"
                   class="report-tag"
-                  @click="openReport(key)"
+                  @click="openReport(String(key))"
                 >
-                  {{ formatReportName(key) }}
+                  {{ formatReportName(String(key)) }}
                 </el-tag>
               </div>
             </div>
@@ -292,9 +387,9 @@
       <el-tabs v-model="activeReportTab" type="border-card">
         <el-tab-pane
           v-for="(content, key) in lastAnalysis?.reports"
-          :key="key"
-          :label="formatReportName(key)"
-          :name="key"
+          :key="String(key)"
+          :label="formatReportName(String(key))"
+          :name="String(key)"
         >
           <div class="report-content">
             <el-scrollbar height="500px">
@@ -374,7 +469,12 @@ import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
 import type { EChartsOption } from 'echarts'
 import { favoritesApi } from '@/api/favorites'
-import { useNotificationStore } from '@/stores/notifications'
+import {
+  thesesApi,
+  type DebateRecordItem,
+  type ThesisItem,
+  type ThesisVersionItem
+} from '@/api/theses'
 
 
 echartsUse([CandlestickChart, GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, TitleComponent, CanvasRenderer])
@@ -387,23 +487,12 @@ const router = useRouter()
 const analysisStatus = ref<'idle' | 'running' | 'completed' | 'failed'>('idle')
 const analysisProgress = ref(0)
 const analysisMessage = ref('')
-const currentTaskId = ref<string | null>(null)
 const lastAnalysis = ref<any | null>(null)
 const lastTaskInfo = ref<any | null>(null) // 保存任务信息（包含 end_time 等）
 
 // 报告对话框
 const showReportsDialog = ref(false)
 const activeReportTab = ref('')
-
-const notifStore = useNotificationStore()
-
-const lastAnalysisTagType = computed(() => {
-  const reco = String(lastAnalysis.value?.recommendation || '').toLowerCase()
-  if (reco.includes('买') || reco.includes('buy') || reco.includes('增持') || reco.includes('强')) return 'success'
-  if (reco.includes('卖') || reco.includes('sell')) return 'danger'
-  if (reco.includes('减持') || reco.includes('谨慎')) return 'warning'
-  return 'info'
-})
 
 // 股票代码（从路由参数获取）
 const code = computed(() => {
@@ -419,6 +508,10 @@ const symbol = computed(() => code.value.split('.')[0])  // 提取6位代码
 const stockName = ref('')
 const market = ref('')
 const isFav = ref(false)
+const activeThesis = ref<ThesisItem | null>(null)
+const thesisVersions = ref<ThesisVersionItem[]>([])
+const thesisDebates = ref<DebateRecordItem[]>([])
+const thesisTab = ref('summary')
 
 // ECharts K线配置
 const kOption = ref<EChartsOption>({
@@ -672,6 +765,27 @@ async function fetchQuote() {
   }
 }
 
+async function fetchActiveThesis() {
+  try {
+    const res = await thesesApi.active(symbol.value)
+    if (res.success) {
+      activeThesis.value = res.data
+      if (res.data?._id) {
+        const [versionRes, debateRes] = await Promise.allSettled([
+          thesesApi.versions(res.data._id),
+          thesesApi.debates(res.data._id, 6)
+        ])
+        thesisVersions.value = versionRes.status === 'fulfilled' && versionRes.value.success ? (versionRes.value.data || []) : []
+        thesisDebates.value = debateRes.status === 'fulfilled' && debateRes.value.success ? (debateRes.value.data || []) : []
+      }
+    }
+  } catch (error) {
+    activeThesis.value = null
+    thesisVersions.value = []
+    thesisDebates.value = []
+  }
+}
+
 async function fetchFundamentals() {
   try {
     const res = await stocksApi.getFundamentals(code.value)
@@ -713,6 +827,34 @@ async function fetchSyncStatus() {
   }
 }
 
+function openThesisPage() {
+  if (!activeThesis.value?._id) {
+    router.push('/thesis')
+    return
+  }
+  router.push({ path: '/thesis', query: { thesisId: activeThesis.value._id } })
+}
+
+function formatHealthDelta(delta?: number | null) {
+  if (delta === null || delta === undefined) return '-'
+  const value = Number(delta)
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+function getHealthDeltaClass(delta?: number | null) {
+  const value = Number(delta || 0)
+  if (value > 0) return 'positive'
+  if (value < 0) return 'negative'
+  return 'neutral'
+}
+
+function getAssumptionTagType(status?: string) {
+  if (status === '完好') return 'success'
+  if (status === '弱化') return 'warning'
+  if (status === '破裂') return 'danger'
+  return 'info'
+}
+
 let timer: any = null
 async function checkFavorite() {
   try {
@@ -732,7 +874,8 @@ onMounted(async () => {
     fetchNews(),
     checkFavorite(),
     fetchLatestAnalysis(),  // 获取最新的历史分析报告
-    fetchSyncStatus()  // 获取同步状态
+    fetchSyncStatus(),  // 获取同步状态
+    fetchActiveThesis()
   ])
   // 每30秒刷新一次报价
   timer = setInterval(fetchQuote, 30000)
@@ -889,11 +1032,6 @@ async function onToggleFavorite() {
 
 function goPaperTrading() {
   router.push({ name: 'PaperTradingHome', query: { code: code.value } })
-}
-
-function scrollToDetail() {
-  const el = document.getElementById('analysis-detail')
-  if (el) el.scrollIntoView({ behavior: 'smooth' })
 }
 
 // 获取最新的历史分析报告
@@ -1116,7 +1254,8 @@ function formatReportName(key: string): string {
 function renderMarkdown(content: string): string {
   if (!content) return '<p>暂无内容</p>'
   try {
-    return marked(content)
+    const rendered = marked.parse(content)
+    return typeof rendered === 'string' ? rendered : '<p>内容正在生成中</p>'
   } catch (e) {
     console.error('Markdown渲染失败:', e)
     return `<pre>${content}</pre>`
@@ -1208,6 +1347,82 @@ function exportReport() {
 .card-hd { display: flex; align-items: center; justify-content: space-between; }
 .k-chart { height: 320px; }
 .legend { margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
+.thesis-summary-card { margin-top: 16px; }
+.thesis-tabs { margin-top: -8px; }
+.thesis-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.thesis-summary .item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+.thesis-summary .item span {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.thesis-summary .item b {
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+.thesis-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.thesis-list-item {
+  padding: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-extra-light);
+}
+.thesis-list-item .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.thesis-list-item .row + .row {
+  margin-top: 8px;
+}
+.thesis-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  line-height: 1.7;
+}
+.debate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.mini-title {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+.mini-point {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+}
+.mini-history {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--el-border-color);
+}
+.positive { color: var(--el-color-success); }
+.negative { color: var(--el-color-danger); }
+.neutral { color: var(--el-text-color-secondary); }
 
 .news-card .news-list { display: flex; flex-direction: column; }
 .news-item { padding: 10px 12px; border-bottom: 1px solid var(--el-border-color-lighter); transition: background-color .2s ease; }
@@ -1237,6 +1452,8 @@ function exportReport() {
 
 @media (max-width: 1024px) {
   .stats { grid-template-columns: repeat(4, 1fr); }
+  .thesis-summary,
+  .debate-grid { grid-template-columns: 1fr; }
 }
 
 /* 报告相关样式 */

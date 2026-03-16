@@ -22,7 +22,12 @@ init_logging()
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
-from app.services.simple_analysis_service import create_analysis_config, get_provider_by_model_name
+from app.services.simple_analysis_service import (
+    create_analysis_config,
+    get_provider_by_model_name,
+    get_provider_by_model_name_sync,
+)
+from app.services.model_resolver import DEFAULT_DEEP_MODEL, DEFAULT_QUICK_MODEL
 from app.models.analysis import (
     AnalysisParameters, AnalysisResult, AnalysisTask, AnalysisBatch,
     AnalysisStatus, BatchStatus, SingleAnalysisRequest, BatchAnalysisRequest
@@ -168,7 +173,7 @@ class AnalysisService:
             progress_tracker.update_progress("💰 预估分析成本")
 
             # 根据模型名称动态查找供应商（同步版本）
-            llm_provider = "dashscope"  # 默认使用dashscope
+            llm_provider = get_provider_by_model_name_sync(quick_model)
 
             # 参数配置
             progress_tracker.update_progress("⚙️ 配置分析参数")
@@ -185,6 +190,10 @@ class AnalysisService:
                 quick_model_config=quick_model_config,  # 传递模型配置
                 deep_model_config=deep_model_config     # 传递模型配置
             )
+            config["workflow_mode"] = getattr(task.parameters, "workflow_mode", "legacy")
+            config["thesis_id"] = getattr(task.parameters, "thesis_id", None)
+            config["position_id"] = getattr(task.parameters, "position_id", None)
+            config["user_id"] = str(task.user_id)
 
             # 启动引擎
             progress_tracker.update_progress("🚀 初始化AI分析引擎")
@@ -217,13 +226,20 @@ class AnalysisService:
                 analysis_id=str(uuid.uuid4()),
                 summary=decision.get("summary", ""),
                 recommendation=decision.get("recommendation", ""),
-                confidence_score=decision.get("confidence_score", 0.0),
+                confidence_score=decision.get("confidence_score", decision.get("confidence", 0.0)),
                 risk_level=decision.get("risk_level", "中等"),
                 key_points=decision.get("key_points", []),
                 detailed_analysis=decision,
                 execution_time=execution_time,
                 tokens_used=decision.get("tokens_used", 0),
-                model_info=model_info  # 🔥 添加模型信息字段
+                model_info=model_info,  # 🔥 添加模型信息字段
+                thesis=decision.get("thesis"),
+                thesis_health=decision.get("thesis_health"),
+                debate_verdict=decision.get("debate_verdict"),
+                exit_decision=decision.get("exit_decision"),
+                macro_assessment=decision.get("macro_assessment"),
+                sector_rotation=decision.get("sector_rotation"),
+                cognitive_mirror=decision.get("cognitive_mirror"),
             )
 
             logger.info(f"✅ [线程池] 分析任务完成: {task.task_id} - 耗时{execution_time:.2f}秒")
@@ -293,7 +309,7 @@ class AnalysisService:
                 logger.warning(f"⚠️ 从 MongoDB 读取模型配置失败: {e}，将使用默认参数")
 
             # 根据模型名称动态查找供应商（同步版本）
-            llm_provider = "dashscope"  # 默认使用dashscope
+            llm_provider = get_provider_by_model_name_sync(quick_model)
 
             # 使用标准配置函数创建完整配置
             from app.services.simple_analysis_service import create_analysis_config
@@ -307,6 +323,10 @@ class AnalysisService:
                 quick_model_config=quick_model_config,  # 传递模型配置
                 deep_model_config=deep_model_config     # 传递模型配置
             )
+            config["workflow_mode"] = getattr(task.parameters, "workflow_mode", "legacy")
+            config["thesis_id"] = getattr(task.parameters, "thesis_id", None)
+            config["position_id"] = getattr(task.parameters, "position_id", None)
+            config["user_id"] = str(task.user_id)
 
             # 获取TradingAgents实例
             trading_graph = self._get_trading_graph(config)
@@ -329,13 +349,20 @@ class AnalysisService:
                 analysis_id=str(uuid.uuid4()),
                 summary=decision.get("summary", ""),
                 recommendation=decision.get("recommendation", ""),
-                confidence_score=decision.get("confidence_score", 0.0),
+                confidence_score=decision.get("confidence_score", decision.get("confidence", 0.0)),
                 risk_level=decision.get("risk_level", "中等"),
                 key_points=decision.get("key_points", []),
                 detailed_analysis=decision,
                 execution_time=execution_time,
                 tokens_used=decision.get("tokens_used", 0),
-                model_info=model_info  # 🔥 添加模型信息字段
+                model_info=model_info,  # 🔥 添加模型信息字段
+                thesis=decision.get("thesis"),
+                thesis_health=decision.get("thesis_health"),
+                debate_verdict=decision.get("debate_verdict"),
+                exit_decision=decision.get("exit_decision"),
+                macro_assessment=decision.get("macro_assessment"),
+                sector_rotation=decision.get("sector_rotation"),
+                cognitive_mirror=decision.get("cognitive_mirror"),
             )
 
             logger.info(f"✅ [线程池] 分析任务完成: {task.task_id} - 耗时{execution_time:.2f}秒")
@@ -392,7 +419,7 @@ class AnalysisService:
                 deep_model = getattr(task.parameters, 'deep_analysis_model', None)
 
                 # 优先使用深度分析模型，如果没有则使用快速分析模型
-                model_name = deep_model or quick_model or "qwen-plus"
+                model_name = deep_model or quick_model or DEFAULT_DEEP_MODEL
 
                 # 根据模型名称确定供应商
                 from app.services.simple_analysis_service import get_provider_by_model_name
@@ -454,9 +481,9 @@ class AnalysisService:
             # 填充分析参数中的模型（若请求未显式提供）
             params = request.parameters or AnalysisParameters()
             if not getattr(params, 'quick_analysis_model', None):
-                params.quick_analysis_model = effective_settings.get("quick_analysis_model", "qwen-turbo")
+                params.quick_analysis_model = effective_settings.get("quick_analysis_model", DEFAULT_QUICK_MODEL)
             if not getattr(params, 'deep_analysis_model', None):
-                params.deep_analysis_model = effective_settings.get("deep_analysis_model", "qwen-max")
+                params.deep_analysis_model = effective_settings.get("deep_analysis_model", DEFAULT_DEEP_MODEL)
 
             # 应用系统级并发与可见性超时（若提供）
             try:
@@ -532,9 +559,9 @@ class AnalysisService:
 
             params = request.parameters or AnalysisParameters()
             if not getattr(params, 'quick_analysis_model', None):
-                params.quick_analysis_model = effective_settings.get("quick_analysis_model", "qwen-turbo")
+                params.quick_analysis_model = effective_settings.get("quick_analysis_model", DEFAULT_QUICK_MODEL)
             if not getattr(params, 'deep_analysis_model', None):
-                params.deep_analysis_model = effective_settings.get("deep_analysis_model", "qwen-max")
+                params.deep_analysis_model = effective_settings.get("deep_analysis_model", DEFAULT_DEEP_MODEL)
 
             try:
                 self.queue_service.user_concurrent_limit = int(effective_settings.get("max_concurrent_tasks", DEFAULT_USER_CONCURRENT_LIMIT))
@@ -672,6 +699,10 @@ class AnalysisService:
                 quick_model_config=quick_model_config,  # 传递模型配置
                 deep_model_config=deep_model_config     # 传递模型配置
             )
+            config["workflow_mode"] = getattr(task.parameters, "workflow_mode", "legacy")
+            config["thesis_id"] = getattr(task.parameters, "thesis_id", None)
+            config["position_id"] = getattr(task.parameters, "position_id", None)
+            config["user_id"] = str(task.user_id)
             
             if progress_callback:
                 progress_callback(30, "创建分析图...")
@@ -702,13 +733,20 @@ class AnalysisService:
                 analysis_id=str(uuid.uuid4()),
                 summary=decision.get("summary", ""),
                 recommendation=decision.get("recommendation", ""),
-                confidence_score=decision.get("confidence_score", 0.0),
+                confidence_score=decision.get("confidence_score", decision.get("confidence", 0.0)),
                 risk_level=decision.get("risk_level", "中等"),
                 key_points=decision.get("key_points", []),
                 detailed_analysis=decision,
                 execution_time=execution_time,
                 tokens_used=decision.get("tokens_used", 0),
-                model_info=model_info  # 🔥 添加模型信息字段
+                model_info=model_info,  # 🔥 添加模型信息字段
+                thesis=decision.get("thesis"),
+                thesis_health=decision.get("thesis_health"),
+                debate_verdict=decision.get("debate_verdict"),
+                exit_decision=decision.get("exit_decision"),
+                macro_assessment=decision.get("macro_assessment"),
+                sector_rotation=decision.get("sector_rotation"),
+                cognitive_mirror=decision.get("cognitive_mirror"),
             )
 
             if progress_callback:

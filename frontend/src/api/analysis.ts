@@ -32,6 +32,9 @@ export interface SingleAnalysisRequest {
     include_sentiment?: boolean
     include_risk?: boolean
     language?: string
+    workflow_mode?: 'legacy' | 'investmind_v3'
+    thesis_id?: string
+    position_id?: string
     quick_analysis_model?: string
     deep_analysis_model?: string
   }
@@ -476,7 +479,6 @@ export const getStockPlaceholder = (market: string): string => {
   }
   return placeholders[market] ?? '输入股票代码'
 }
-
 
 
 

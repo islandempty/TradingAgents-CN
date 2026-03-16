@@ -68,6 +68,10 @@ class FavoriteStock(BaseModel):
     notes: str = Field(default="", description="用户备注")
     alert_price_high: Optional[float] = Field(None, description="价格上限提醒")
     alert_price_low: Optional[float] = Field(None, description="价格下限提醒")
+    watch_reason: Optional[str] = Field(None, description="观察池原因")
+    signal_confidence: Optional[float] = Field(None, description="信号置信度")
+    linked_thesis_id: Optional[str] = Field(None, description="关联 Thesis ID")
+    watch_status: Optional[str] = Field(None, description="观察池状态")
 
 
 class User(BaseModel):

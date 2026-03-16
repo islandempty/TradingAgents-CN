@@ -17,14 +17,14 @@ logger = logging.getLogger("webapi.notifications")
 @router.get("/notifications")
 async def list_notifications(
     status: Optional[str] = Query(None, description="状态: unread|read|all"),
-    type: Optional[str] = Query(None, description="类型: analysis|alert|system"),
+    type: Optional[str] = Query(None, description="类型: analysis|alert|system|thesis_alert|edge_report|cognitive_snapshot"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user)
 ):
     svc = get_notifications_service()
     s = status if status in ("read","unread") else None
-    t = type if type in ("analysis","alert","system") else None
+    t = type if type in ("analysis", "alert", "system", "thesis_alert", "edge_report", "cognitive_snapshot") else None
     data = await svc.list(user_id=user["id"], status=s, ntype=t, page=page, page_size=page_size)
     return ok(data=data.model_dump(), message="ok")
 
